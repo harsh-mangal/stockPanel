@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <body>
+    <pre id="log"></pre>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+      const log = (...a) => {
+        document.getElementById('log').textContent += a.map(x => typeof x==='string'?x:JSON.stringify(x)).join(' ') + '\n';
+      };
+
+      const socket = io('http://localhost:8080', { transports: ['websocket'] });
+
+      // Example: subscribe to an order + a symbol stream
+      const MASTER_ID = prompt('Enter masterOrderId after you create one via API:', '');
+      const SYMBOL = prompt('Enter symbol to stream ticks (e.g., INFY):', 'INFY');
+
+      if (MASTER_ID) socket.emit('join', `order:${MASTER_ID}`);
+      if (SYMBOL) socket.emit('join', `symbol:${SYMBOL}`);
+
+      socket.on('connect', () => log('connected', socket.id));
+      socket.on('order.master.created', (e) => log('master.created', e));
+      socket.on('order.master.summary', (e) => log('master.summary', e));
+      socket.on('order.child.updated', (e) => log('child.updated', e));
+      socket.on('trade.new', (e) => log('trade.new', e));
+      socket.on('tick', (q) => log('tick', q));
+      socket.on('disconnect', () => log('disconnected'));
+    </script>
+  </body>
+</html>
