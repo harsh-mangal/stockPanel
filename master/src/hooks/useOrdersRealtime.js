@@ -6,7 +6,7 @@ export function useOrdersRealtime({ onCreated, onSummary, masterRoomId }) {
   const socketRef = useRef(null);
 
   useEffect(() => {
-    const url = "http://localhost:8080";
+    const url = "http://192.168.1.9:8080";
     const s = io(url, { transports: ["websocket"] });
     socketRef.current = s;
 

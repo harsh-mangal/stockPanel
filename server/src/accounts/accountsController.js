@@ -44,7 +44,19 @@ export const createAccount = async (req, res, next) => {
     res.status(201).json(acc);
   } catch (e) { next(e); }
 };
-
+export const getAccountById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: "INVALID_ID" });
+    }
+    const doc = await LinkedAccount.findById(id).lean();
+    if (!doc) return res.status(404).json({ error: "NOT_FOUND" });
+    res.json(doc);
+  } catch (e) {
+    next(e);
+  }
+};
 export const listAccounts = async (req, res, next) => {
   try {
     const { enabled, tag, broker } = req.query;

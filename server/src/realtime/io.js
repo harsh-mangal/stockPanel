@@ -1,48 +1,66 @@
-import { Server } from 'socket.io';
-import { presence } from './presence.js';
+// realtime/io.js
+import { Server } from "socket.io";
+import { presence } from "./presence.js";
 
 let io;
+const extractHex24 = (val) => (String(val ?? "").match(/[a-f0-9]{24}/i) || [])[0] || null;
 
 export function attachIO(httpServer) {
   io = new Server(httpServer, {
-    cors: { origin: '*', methods: ['GET','POST','PATCH'] },
+    cors: { origin: "*", methods: ["GET", "POST", "PATCH"] },
   });
 
-  io.on('connection', (socket) => {
-    const accountId = socket.handshake?.query?.accountId;
+  io.on("connection", (socket) => {
+    const fromAuth  = socket.handshake?.auth?.accountId;
+    const fromQuery = socket.handshake?.query?.accountId;
+    const bootHex   = extractHex24(fromAuth || fromQuery);
 
-    // If this socket represents a linked account, mark online and join its room
-    if (accountId) {
-      socket.join(`account:${accountId}`);
-      presence.setOnline(String(accountId), socket.id);
-      io.to('presence:accounts').emit('presence.roster.changed'); // optional broadcast
+    if (bootHex) {
+      socket.data.linkedAccountId = bootHex;
+      socket.join(`account:${bootHex}`);
+      presence.setOnline(bootHex, socket.id);
+      io.to("presence:accounts").emit("presence.roster.changed");
     }
 
-    // Generic room join/leave for admin pages
-    socket.on('join', (room) => room && socket.join(String(room)));
-    socket.on('leave', (room) => room && socket.leave(String(room)));
-
-    // Presence explicit messages from clients
-    socket.on('presence.online', (p) => {
-      if (!p?.accountId) return;
-      presence.setOnline(String(p.accountId), socket.id);
+    socket.on("presence.linked.online", (p = {}) => {
+      const hex = extractHex24(p.accountId);
+      if (!hex) return;
+      socket.data.linkedAccountId = hex;
+      socket.join(`account:${hex}`);
+      if (p.userId) socket.join(`user:${p.userId}`);
+      presence.setOnline(hex, socket.id);
+      io.to("presence:accounts").emit("presence.roster.changed");
     });
 
-    socket.on('presence.ping', (p) => {
-      if (!p?.accountId) return;
-      presence.ping(String(p.accountId));
+    socket.on("join", (arg) => {
+      const room = typeof arg === "string" ? arg : arg?.room;
+      if (!room) return;
+      socket.join(String(room));
+      const m = String(room).match(/^account:([a-f0-9]{24})$/i);
+      if (m) {
+        const hex = m[1];
+        socket.data.linkedAccountId = hex;
+        presence.setOnline(hex, socket.id);
+        io.to("presence:accounts").emit("presence.roster.changed");
+      }
     });
 
-    socket.on('presence.offline', (p) => {
-      if (!p?.accountId) return;
-      presence.setOffline(String(p.accountId), socket.id);
-      io.to('presence:accounts').emit('presence.roster.changed');
+    socket.on("leave", (arg) => {
+      const room = typeof arg === "string" ? arg : arg?.room;
+      if (!room) return;
+      socket.leave(String(room));
     });
 
-    socket.on('disconnect', () => {
-      if (accountId) {
-        presence.setOffline(String(accountId), socket.id);
-        io.to('presence:accounts').emit('presence.roster.changed');
+    socket.on("presence.ping", (p = {}) => {
+      const hex = extractHex24(p.accountId || socket.data.linkedAccountId);
+      if (hex) presence.ping(hex);
+    });
+
+    socket.on("disconnect", () => {
+      const hex = extractHex24(socket.data.linkedAccountId);
+      if (hex) {
+        presence.setOffline(hex, socket.id);
+        io.to("presence:accounts").emit("presence.roster.changed");
       }
     });
   });
@@ -51,6 +69,6 @@ export function attachIO(httpServer) {
 }
 
 export function getIO() {
-  if (!io) throw new Error('Socket.IO not initialized yet');
+  if (!io) throw new Error("Socket.IO not initialized yet");
   return io;
 }

@@ -8,7 +8,7 @@
         document.getElementById('log').textContent += a.map(x => typeof x==='string'?x:JSON.stringify(x)).join(' ') + '\n';
       };
 
-      const socket = io('http://localhost:8080', { transports: ['websocket'] });
+      const socket = io('http://192.168.1.9:8080', { transports: ['websocket'] });
 
       // Example: subscribe to an order + a symbol stream
       const MASTER_ID = prompt('Enter masterOrderId after you create one via API:', '');

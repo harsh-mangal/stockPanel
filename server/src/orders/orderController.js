@@ -1,3 +1,4 @@
+// src/orders/createAndDispatchMasterController.js (or wherever you export from)
 import { nanoid } from "nanoid";
 import MasterOrder from "../models/MasterOrder.js";
 import ChildOrder from "../models/ChildOrder.js";
@@ -6,7 +7,7 @@ import { allocateQuantities } from "../utils/allocation.js";
 import { once } from "../utils/idempotency.js";
 import { getBrokerAdapter } from "../broker/brokerRegistry.js";
 import { simulator } from "../sim/simulator.js";
-import { getIO } from "../realtime/io.js"; // 👈 realtime
+import { getIO } from "../realtime/io.js";
 import {
   computeRequiredMargin,
   priceBandCheck,
@@ -20,7 +21,7 @@ export const createAndDispatchMaster = async (req, res, next) => {
       symbol,
       side,
       orderType = "MARKET",
-      price, // <- your selected price (optional for MARKET/SL-M)
+      price,
       triggerPrice,
       productType = "MIS",
       validity = "DAY",
@@ -32,56 +33,36 @@ export const createAndDispatchMaster = async (req, res, next) => {
       // targeting
       targets = { userId: null, accountIds: [], tags: [], brokers: [] },
 
-      // NEW knobs
-      allowPartial = true, // if false: fail the whole order when any account lacks margin
-      lot = 1, // lot size if you use it in margin calc
-      maxAwayPct = 5, // price-band sanity guard vs best bid/ask
+      // knobs
+      allowPartial = true,
+      lot = 1,
+      maxAwayPct = 5,
     } = req.body;
 
-    // --- Quotes & base validations
+    // --- Quote & base validations
     const q = simulator.quote(symbol);
     if (!q) return res.status(400).json({ error: "UNKNOWN_SYMBOL" });
 
-    // Enforce price presence for LIMIT/SL; SL/SL-M needs trigger
-    if (
-      (orderType === "LIMIT" || orderType === "SL") &&
-      (price == null || price <= 0)
-    ) {
-      return res.status(400).json({
-        error: "INVALID_PRICE",
-        note: "LIMIT/SL require positive price",
-      });
+    if ((orderType === "LIMIT" || orderType === "SL") && (!price || price <= 0)) {
+      return res.status(400).json({ error: "INVALID_PRICE", note: "LIMIT/SL require positive price" });
     }
-    if (
-      (orderType === "SL" || orderType === "SL-M") &&
-      (triggerPrice == null || triggerPrice <= 0)
-    ) {
-      return res.status(400).json({
-        error: "INVALID_TRIGGER",
-        note: "SL/SL-M require positive triggerPrice",
-      });
+    if ((orderType === "SL" || orderType === "SL-M") && (!triggerPrice || triggerPrice <= 0)) {
+      return res.status(400).json({ error: "INVALID_TRIGGER", note: "SL/SL-M require positive triggerPrice" });
     }
 
-    // Effective price:
-    // - LIMIT/SL: use provided price
-    // - MARKET/SL-M: if you provided a price, we respect it; else use best side from quote
     const sideBest = side === "BUY" ? q.ask : q.bid;
     const effectivePrice =
       orderType === "MARKET" || orderType === "SL-M"
-        ? price && price > 0
-          ? price
-          : sideBest
+        ? (price && price > 0 ? price : sideBest)
         : price;
 
-    // Risk & price band checks
     const requirePrice = !(orderType === "MARKET" || orderType === "SL-M");
     const risk = basicRiskCheck({
       price: effectivePrice,
       qty: Math.max(masterQty, allocationConfig.sameQty || 0, 1),
       requirePrice,
     });
-    if (!risk.ok)
-      return res.status(400).json({ error: "RISK_BLOCK", reason: risk.reason });
+    if (!risk.ok) return res.status(400).json({ error: "RISK_BLOCK", reason: risk.reason });
 
     const band = priceBandCheck({
       side,
@@ -91,38 +72,27 @@ export const createAndDispatchMaster = async (req, res, next) => {
       maxAwayPct,
     });
     if (!band.ok) {
-      return res
-        .status(400)
-        .json({ error: "PRICE_BAND", awayPct: band.awayPct, maxAwayPct });
+      return res.status(400).json({ error: "PRICE_BAND", awayPct: band.awayPct, maxAwayPct });
     }
 
-    // --- Select target accounts
+    // --- Target account selection (then filter to online)
     const aq = { enabled: true };
     if (targets.userId) aq.userId = targets.userId;
-    if (Array.isArray(targets.accountIds) && targets.accountIds.length)
-      aq._id = { $in: targets.accountIds };
-    if (Array.isArray(targets.tags) && targets.tags.length)
-      aq.tags = { $in: targets.tags };
-    if (Array.isArray(targets.brokers) && targets.brokers.length)
-      aq.broker = { $in: targets.brokers.map((b) => b.toUpperCase()) };
+    if (Array.isArray(targets.accountIds) && targets.accountIds.length) aq._id = { $in: targets.accountIds };
+    if (Array.isArray(targets.tags) && targets.tags.length) aq.tags = { $in: targets.tags };
+    if (Array.isArray(targets.brokers) && targets.brokers.length) aq.broker = { $in: targets.brokers.map((b) => b.toUpperCase()) };
 
     let accounts = await LinkedAccount.find(aq).lean();
-    if (!accounts.length)
-      return res.status(400).json({ error: "NO_MATCHING_ACCOUNTS" });
+    if (!accounts.length) return res.status(400).json({ error: "NO_MATCHING_ACCOUNTS" });
+
     const onlineSet = presence.onlineSet();
     accounts = accounts.filter((a) => onlineSet.has(String(a._id)));
     if (!accounts.length) {
-      return res
-        .status(400)
-        .json({
-          error: "NO_ONLINE_ACCOUNTS",
-          note: "All matching accounts are offline",
-        });
+      return res.status(400).json({ error: "NO_ONLINE_ACCOUNTS", note: "All matching accounts are offline" });
     }
-    // --- Allocation (requested per-account qty)
-    const capitals = Object.fromEntries(
-      accounts.map((a) => [String(a._id), a.capital || 0])
-    );
+
+    // --- Allocation
+    const capitals = Object.fromEntries(accounts.map((a) => [String(a._id), a.capital || 0]));
     const dist = allocateQuantities({
       mode: allocationMode,
       config: allocationConfig,
@@ -131,18 +101,12 @@ export const createAndDispatchMaster = async (req, res, next) => {
       capitalsById: capitals,
     });
 
-    const requestedQty = Array.from(dist.values()).reduce(
-      (s, n) => s + Number(n || 0),
-      0
-    );
+    const requestedQty = Array.from(dist.values()).reduce((s, n) => s + Number(n || 0), 0);
     if (!requestedQty) {
-      return res.status(400).json({
-        error: "ZERO_ALLOCATION",
-        note: "Allocated quantity is zero for all targets",
-      });
+      return res.status(400).json({ error: "ZERO_ALLOCATION", note: "Allocated quantity is zero for all targets" });
     }
 
-    // --- Create master (early)
+    // --- Create master upfront
     const master = await MasterOrder.create({
       createdBy: targets.userId ?? null,
       symbol,
@@ -156,19 +120,13 @@ export const createAndDispatchMaster = async (req, res, next) => {
       allocationConfig,
       status: "DISPATCHING",
       summary: { requestedQty, dispatchedQty: 0, filledQty: 0, avgPrice: 0 },
-      auditTrail: [
-        {
-          at: new Date(),
-          by: "system",
-          action: "CREATE",
-          note: "Master order created",
-        },
-      ],
+      auditTrail: [{ at: new Date(), by: "system", action: "CREATE", note: "Master order created" }],
     });
 
-    // Realtime: notify creation
     const io = getIO();
-    if (targets.userId)
+
+    // Global emits (as you already had)
+    if (targets.userId) {
       io.to(`user:${targets.userId}`).emit("order.master.created", {
         masterOrderId: String(master._id),
         symbol,
@@ -177,6 +135,7 @@ export const createAndDispatchMaster = async (req, res, next) => {
         allocationMode,
         requestedQty,
       });
+    }
     io.to(`order:${master._id}`).emit("order.master.created", {
       masterOrderId: String(master._id),
       symbol,
@@ -186,10 +145,10 @@ export const createAndDispatchMaster = async (req, res, next) => {
       requestedQty,
     });
 
-    // --- Margin checks per-account; build children only when margin OK
+    // --- Build children & dispatch plan with margin checks
     const children = [];
     const dispatchPlan = [];
-    const failures = []; // accounts skipped due to margin or qty=0
+    const failures = [];
     let dispatchedQty = 0;
 
     for (const a of accounts) {
@@ -202,6 +161,7 @@ export const createAndDispatchMaster = async (req, res, next) => {
         qty,
         lot,
       });
+
       const capital = a.capital || 0;
       const marginOk = capital >= requiredMargin;
 
@@ -227,7 +187,6 @@ export const createAndDispatchMaster = async (req, res, next) => {
             failingAccount: failures[failures.length - 1],
           });
         }
-        // skip this account and continue
         continue;
       }
 
@@ -240,21 +199,37 @@ export const createAndDispatchMaster = async (req, res, next) => {
         side,
         qty,
         orderType,
-        price: effectivePrice, // <- persist selected/effective price
+        price: effectivePrice,
         triggerPrice,
         status: "QUEUED",
         timestamps: { createdAt: new Date() },
-        // (optional) persist margin for audit: requiredMargin
       });
 
       children.push(child);
       dispatchedQty += qty;
-      dispatchPlan.push({
+      const plan = {
         accountId: String(a._id),
         displayName: a.displayName,
         broker: (a.broker || "PAPER").toUpperCase(),
         qty,
         requiredMargin,
+      };
+      dispatchPlan.push(plan);
+
+      // 🔊 NEW: notify this account immediately about its child
+      io.to(`account:${plan.accountId}`).emit("order.child.created", {
+        childId: String(child._id),
+        masterOrderId: String(master._id),
+        accountId: plan.accountId,
+        broker: child.broker,
+        symbol,
+        side,
+        qty,
+        orderType,
+        price: effectivePrice,
+        triggerPrice,
+        status: "QUEUED",
+        at: Date.now(),
       });
     }
 
@@ -268,22 +243,49 @@ export const createAndDispatchMaster = async (req, res, next) => {
       });
       return res.status(400).json({
         error: "NO_DISPATCHABLE_CHILDREN",
-        note: failures.length
-          ? "All targets failed margin"
-          : "All allocations were zero",
+        note: failures.length ? "All targets failed margin" : "All allocations were zero",
       });
     }
 
+    // Update master dispatched qty
     master.summary.dispatchedQty = dispatchedQty;
     await master.save();
 
-    // Realtime: initial summary with plan
+    // Global summary (existing)
     io.to(`order:${master._id}`).emit("order.master.summary", {
       masterOrderId: String(master._id),
       requestedQty,
       dispatchedQty,
       children: dispatchPlan,
+      at: Date.now(),
     });
+
+    // 🔊 NEW: per-account compact summary
+    for (const plan of dispatchPlan) {
+      io.to(`account:${plan.accountId}`).emit("order.master.created", {
+        masterOrderId: String(master._id),
+        symbol,
+        side,
+        orderType,
+        allocationMode,
+        requestedQty,
+        myPlannedQty: plan.qty,
+        requiredMargin: plan.requiredMargin,
+        displayName: plan.displayName,
+        at: Date.now(),
+      });
+
+      io.to(`account:${plan.accountId}`).emit("order.master.summary", {
+        masterOrderId: String(master._id),
+        symbol,
+        side,
+        orderType,
+        requestedQty,
+        dispatchedQty,
+        myPlannedQty: plan.qty,
+        at: Date.now(),
+      });
+    }
 
     // --- Async dispatch (per-account adapter) with idempotency
     for (const child of children) {
@@ -300,7 +302,7 @@ export const createAndDispatchMaster = async (req, res, next) => {
           side,
           qty: child.qty,
           orderType,
-          price: effectivePrice, // pass selected/effective price
+          price: effectivePrice,
           triggerPrice,
         })
         .catch((err) => {
@@ -308,21 +310,29 @@ export const createAndDispatchMaster = async (req, res, next) => {
             childId: String(child._id),
             err: err?.message,
           });
+          // optional: notify account about reject/error
+          const accountId = String(child.accountId);
+          io.to(`account:${accountId}`).emit("order.child.update", {
+            childId: String(child._id),
+            status: "REJECTED",
+            reason: err?.message || "placeOrder failed",
+            at: Date.now(),
+          });
         });
     }
 
-    // --- Response
+    // --- HTTP response
     res.status(201).json({
       masterOrderId: master._id,
       symbol,
       side,
       orderType,
-      effectivePrice, // <- echoed for UI
+      effectivePrice,
       requestedQty,
       dispatchedChildren: children.length,
       dispatchedQty,
-      dispatchPlan, // [{accountId, displayName, broker, qty, requiredMargin}]
-      failures, // [{accountId, displayName, reason, requiredMargin, capital}]
+      dispatchPlan,
+      failures,
     });
   } catch (e) {
     next(e);
@@ -336,7 +346,7 @@ export const getMaster = async (req, res, next) => {
     const children = await ChildOrder.find({ masterOrderId: m._id }).lean();
     const totalFilled = children.reduce((s, c) => s + (c.filledQty || 0), 0);
     const avg =
-      children.reduce((s, c) => s + c.avgPrice * (c.filledQty || 0), 0) /
+      children.reduce((s, c) => s + (c.avgPrice * (c.filledQty || 0)), 0) /
       (totalFilled || 1);
     m.summary.filledQty = totalFilled;
     m.summary.avgPrice = +avg.toFixed(2);
@@ -348,10 +358,7 @@ export const getMaster = async (req, res, next) => {
 
 export const listMasters = async (_req, res, next) => {
   try {
-    const list = await MasterOrder.find()
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
+    const list = await MasterOrder.find().sort({ createdAt: -1 }).limit(50).lean();
     res.json(list);
   } catch (e) {
     next(e);

@@ -1,34 +1,23 @@
 // src/accounts/accountsRoutes.js
-import { Router } from 'express';
+import { Router } from "express";
 import {
-  createAccount,
-  listAccounts,
-  updateAccount,
-  bulkCreateAccounts,
-} from './accountsController.js';
-import {
-  listOnlineAccounts,
-  presenceDebug,
-} from './accountsPresenceController.js';
+  createAccount, listAccounts, updateAccount, bulkCreateAccounts, getAccountById,
+} from "./accountsController.js";
+import { listOnlineAccounts, presenceDebug } from "./accountsPresenceController.js";
 
 const r = Router();
 
-/* -------------------------------------------------------------------------- */
-/* 🧾 CRUD ROUTES                                                             */
-/* -------------------------------------------------------------------------- */
-r.post('/', createAccount);          // Create one account
-r.get('/', listAccounts);            // List all accounts
-r.patch('/:id', updateAccount);      // Update by ID
+// specific first
+r.get("/online", listOnlineAccounts);
+r.get("/presence/debug", presenceDebug);
 
-/* -------------------------------------------------------------------------- */
-/* 👥 PRESENCE ROUTES                                                         */
-/* -------------------------------------------------------------------------- */
-r.get('/online', listOnlineAccounts);    // List currently online accounts
-r.get('/presence/debug', presenceDebug); // Debug presence roster
+// CRUD
+r.post("/", createAccount);
+r.get("/", listAccounts);
+r.get("/:id([a-fA-F0-9]{24})", getAccountById);
+r.patch("/:id([a-fA-F0-9]{24})", updateAccount);
 
-/* -------------------------------------------------------------------------- */
-/* 📦 BULK OPS                                                                */
-/* -------------------------------------------------------------------------- */
-r.post('/bulk', bulkCreateAccounts);     // Bulk create accounts
+// bulk
+r.post("/bulk", bulkCreateAccounts);
 
 export default r;

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Linked Account Panel</title>
+
+    <!-- Tailwind Play CDN (no build step) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Optional: tweak theme here
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              slatebg: "#0b1220",
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="bg-slatebg text-slate-100">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
