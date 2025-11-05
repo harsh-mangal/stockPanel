@@ -1,20 +1,34 @@
 // src/accounts/accountsRoutes.js
 import { Router } from 'express';
-import { createAccount, listAccounts, updateAccount, bulkCreateAccounts } from './accountsController.js';
-import { listOnlineAccounts, presenceDebug } from './accountsPresenceController.js';
+import {
+  createAccount,
+  listAccounts,
+  updateAccount,
+  bulkCreateAccounts,
+} from './accountsController.js';
+import {
+  listOnlineAccounts,
+  presenceDebug,
+} from './accountsPresenceController.js';
 
 const r = Router();
 
-// ORDER of routes matters only if you also have GET '/:id' (you don't), but this is fine.
-r.post('/', createAccount);
-r.get('/', listAccounts);
+/* -------------------------------------------------------------------------- */
+/* 🧾 CRUD ROUTES                                                             */
+/* -------------------------------------------------------------------------- */
+r.post('/', createAccount);          // Create one account
+r.get('/', listAccounts);            // List all accounts
+r.patch('/:id', updateAccount);      // Update by ID
 
-// ✅ add this line
-r.get('/online', listOnlineAccounts);
+/* -------------------------------------------------------------------------- */
+/* 👥 PRESENCE ROUTES                                                         */
+/* -------------------------------------------------------------------------- */
+r.get('/online', listOnlineAccounts);    // List currently online accounts
+r.get('/presence/debug', presenceDebug); // Debug presence roster
 
-r.post('/bulk', bulkCreateAccounts);
-r.get('/presence/debug', presenceDebug);
-
-r.patch('/:id', updateAccount);
+/* -------------------------------------------------------------------------- */
+/* 📦 BULK OPS                                                                */
+/* -------------------------------------------------------------------------- */
+r.post('/bulk', bulkCreateAccounts);     // Bulk create accounts
 
 export default r;
