@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 const API_URL =
   process.env.REACT_APP_API_URL ||
   window.BASE_URL ||
-  "http://localhost:4000";
+  "https://final.dodunsoftsolutions.com";
 
 const isHex24 = (s) => /^[a-f0-9]{24}$/i.test(String(s || "").trim());
 
