@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export const config = {
-  PORT: process.env.PORT || 8080,
+  PORT: process.env.PORT || 3044,
   MONGO_URI: process.env.MONGO_URI,
   MARKET_MODE: process.env.MARKET_MODE ?? 'dummy',
   BROKER_MODE: process.env.BROKER_MODE ?? 'paper',
